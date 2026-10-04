@@ -9,6 +9,8 @@ let state = {
     channels: [],
     currentEvent: null,
     currentFeed: null,
+    currentType: null,
+    currentChannelId: null,
     currentM3u8: null,
     currentIframe: null,
     hlsPlayer: null,
@@ -39,12 +41,12 @@ const elements = {
 document.addEventListener('DOMContentLoaded', () => {
     state.viewerId = getViewerId();
     initClock();
-    fetchAgenda();
-    fetchChannels();
+    Promise.all([fetchAgenda(), fetchChannels()]).then(openSharedTarget);
     refreshViewerCounts();
 
     // Actualizar agenda automáticamente cada 60 segundos
     setInterval(fetchAgenda, 60000);
+    setInterval(filterMatches, 30000);
     setInterval(sendViewerHeartbeat, 15000);
     setInterval(refreshViewerCounts, 10000);
     document.addEventListener('visibilitychange', () => {
@@ -126,7 +128,7 @@ async function fetchAgenda() {
         const res = await fetch('/api/agenda');
         const data = await res.json();
         state.events = data.events || [];
-        renderMatches(state.events);
+        filterMatches();
     } catch (err) {
         console.error('Error al cargar agenda:', err);
         elements.matchesGrid.innerHTML = `
@@ -167,16 +169,41 @@ function renderMatches(matches) {
         return;
     }
 
-    elements.matchesGrid.innerHTML = matches.map((match) => {
+    const now = Date.now();
+    const grouped = { live: [], upcoming: [], finished: [] };
+    matches.forEach((match) => {
+        const kickoff = getKickoffTimestamp(match, now);
+        const sourceStatus = String(match.status || match.state || '').toLowerCase();
+        const explicitLive = match.is_live === true || /^(live|en vivo|in progress)$/i.test(sourceStatus);
+        const explicitlyFinished = /^(finished|final|finalizado|ended|terminado)$/i.test(sourceStatus);
+        const status = explicitLive || (!explicitlyFinished && kickoff && kickoff <= now && now - kickoff < 150 * 60 * 1000)
+            ? 'live'
+            : (explicitlyFinished || (kickoff && kickoff <= now) ? 'finished' : 'upcoming');
+        grouped[status].push({ match, kickoff, status });
+    });
+    grouped.live.sort((a, b) => (a.kickoff || 0) - (b.kickoff || 0));
+    grouped.upcoming.sort((a, b) => (a.kickoff || Infinity) - (b.kickoff || Infinity));
+    grouped.finished.sort((a, b) => (b.kickoff || 0) - (a.kickoff || 0));
+
+    const groups = [
+        ['live', 'En vivo ahora', 'fa-circle-dot'],
+        ['upcoming', 'Próximos partidos', 'fa-clock'],
+        ['finished', 'Otros partidos', 'fa-calendar-check']
+    ].filter(([key]) => grouped[key].length);
+
+    elements.matchesGrid.innerHTML = groups.map(([key, label, icon]) => `
+        <h3 class="match-group-heading ${key === 'live' ? 'is-live' : ''}"><i class="fas ${icon}"></i> ${label}<span>${grouped[key].length}</span></h3>
+        ${grouped[key].map(({ match, kickoff, status }) => {
         const feeds = match.embeds || [];
-        const timeDisplay = match.time ? match.time.substring(0, 5) : 'HOY';
+        const timeDisplay = kickoff ? new Date(kickoff).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (match.time ? match.time.substring(0, 5) : 'HOY');
         const matchId = getMatchId(match);
+        const statusText = status === 'live' ? 'EN VIVO' : (status === 'upcoming' ? 'PRÓXIMO' : 'FINALIZADO');
 
         return `
-            <div class="match-card" onclick="playMatchById('${matchId}')">
+            <div class="match-card ${status === 'live' ? 'is-live' : ''}" onclick="playMatchById('${matchId}')">
                 <div class="match-top-row">
-                    <span class="match-time-badge">
-                        <i class="fas fa-clock"></i> ${timeDisplay}
+                    <span class="match-time-badge ${status === 'live' ? 'is-live' : ''}">
+                        <i class="fas ${status === 'live' ? 'fa-circle-dot' : 'fa-clock'}"></i> ${statusText} · ${timeDisplay}
                     </span>
                     <span class="match-sport-badge">${match.sport || 'Fútbol'}</span>
                 </div>
@@ -195,7 +222,31 @@ function renderMatches(matches) {
                 </div>
             </div>
         `;
-    }).join('');
+    }).join('')}
+    `).join('');
+}
+
+function getKickoffTimestamp(match, now = Date.now()) {
+    const explicitDate = match.start_at || match.startAt || match.datetime || match.kickoff || match.date_time;
+    if (explicitDate) {
+        const parsed = Date.parse(explicitDate);
+        if (Number.isFinite(parsed)) return parsed;
+    }
+    const time = String(match.time || '').trim();
+    const clock = time.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*(AM|PM)?$/i);
+    if (!clock) return null;
+    let hours = Number(clock[1]);
+    const minutes = Number(clock[2]);
+    if (clock[3]) {
+        hours = hours % 12 + (/PM/i.test(clock[3]) ? 12 : 0);
+    }
+    const isoDate = String(match.date || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const date = isoDate
+        ? new Date(Number(isoDate[1]), Number(isoDate[2]) - 1, Number(isoDate[3]))
+        : (match.date ? new Date(match.date) : new Date(now));
+    if (!Number.isFinite(date.getTime())) return null;
+    date.setHours(hours, minutes, 0, 0);
+    return date.getTime();
 }
 
 function playMatchById(matchId) {
@@ -205,11 +256,7 @@ function playMatchById(matchId) {
 
 function filterMatches() {
     const query = (elements.matchSearch.value || '').toLowerCase().trim();
-    if (!query) {
-        renderMatches(state.events);
-        return;
-    }
-    const filtered = state.events.filter(m => 
+    const filtered = !query ? state.events : state.events.filter(m =>
         (m.title && m.title.toLowerCase().includes(query)) ||
         (m.sport && m.sport.toLowerCase().includes(query)) ||
         (m.embeds && m.embeds.some(e => e.name.toLowerCase().includes(query)))
@@ -240,11 +287,14 @@ function renderChannels(channels) {
 // ============================================================================
 // Reproducción y Control de Streaming
 // ============================================================================
-function playMatch(index) {
+function playMatch(index, feedIndex = 0) {
     const event = state.events[index];
     if (!event || !event.embeds || event.embeds.length === 0) return;
 
     state.currentEvent = event;
+    state.currentType = 'match';
+    state.currentChannelId = null;
+    document.getElementById('btn-share-stream').disabled = false;
     state.activeMatchId = getMatchId(event);
     sendViewerHeartbeat();
     elements.title.textContent = event.title;
@@ -262,7 +312,7 @@ function playMatch(index) {
     }
 
     // Reproducir primer feed
-    selectFeed(0);
+    selectFeed(Math.min(feedIndex, event.embeds.length - 1));
 
     // Desplazar suavemente hacia el reproductor
     document.getElementById('player-section').scrollIntoView({ behavior: 'smooth' });
@@ -276,6 +326,9 @@ function playChannel(index) {
         title: ch.name,
         embeds: [{ name: ch.name, iframe: ch.iframe }]
     };
+    state.currentType = 'channel';
+    state.currentChannelId = ch.id;
+    document.getElementById('btn-share-stream').disabled = false;
     state.activeMatchId = null;
     sendViewerHeartbeat();
 
@@ -301,6 +354,56 @@ function selectFeed(feedIndex) {
     });
 
     loadStream(feed.iframe);
+    updateShareAddress(feedIndex);
+}
+
+function updateShareAddress(feedIndex = 0) {
+    if (!state.currentEvent) return;
+    const url = new URL(window.location.href);
+    url.search = '';
+    if (state.currentType === 'channel' && state.currentChannelId) {
+        url.searchParams.set('channel', state.currentChannelId);
+    } else {
+        url.searchParams.set('match', getMatchId(state.currentEvent));
+        url.searchParams.set('feed', String(feedIndex));
+    }
+    url.hash = 'player-section';
+    history.replaceState({}, '', url);
+}
+
+async function shareCurrent() {
+    if (!state.currentEvent) return;
+    updateShareAddress(state.currentEvent.embeds.indexOf(state.currentFeed));
+    const shareUrl = window.location.href;
+    const button = document.getElementById('btn-share-stream');
+    try {
+        if (navigator.share) {
+            await navigator.share({ title: `El Ciro · ${state.currentEvent.title}`, url: shareUrl });
+        } else {
+            await navigator.clipboard.writeText(shareUrl);
+            button.innerHTML = '<i class="fas fa-check"></i> Enlace copiado';
+            setTimeout(() => { button.innerHTML = '<i class="fas fa-share-nodes"></i> Compartir'; }, 2200);
+        }
+    } catch (err) {
+        if (err.name !== 'AbortError') {
+            window.prompt('Copia este enlace para compartir el partido:', shareUrl);
+        }
+    }
+}
+
+function openSharedTarget() {
+    const params = new URLSearchParams(window.location.search);
+    const channelId = params.get('channel');
+    if (channelId) {
+        const index = state.channels.findIndex((channel) => channel.id === channelId);
+        if (index >= 0) playChannel(index);
+        return;
+    }
+    const matchId = params.get('match');
+    if (matchId) {
+        const index = state.events.findIndex((match) => getMatchId(match) === matchId);
+        if (index >= 0) playMatch(index, Math.max(0, Number(params.get('feed')) || 0));
+    }
 }
 
 // Cargar transmisión según el modo seleccionado

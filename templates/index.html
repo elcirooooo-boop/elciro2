@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     
     <!-- Custom CSS -->
-    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css', v=3) }}">
 </head>
 <body>
     <!-- Top Header -->
@@ -59,6 +59,9 @@
 
                 <div class="player-actions">
                     <span class="player-mode-label"><i class="fas fa-bolt"></i> HD Directo</span>
+                    <button id="btn-share-stream" class="action-btn" title="Compartir partido o canal" onclick="shareCurrent()" disabled>
+                        <i class="fas fa-share-nodes"></i> Compartir
+                    </button>
                     <button id="btn-refresh-stream" class="action-btn" title="Renovar Token y Recargar Señal" onclick="reloadCurrentStream()">
                         <i class="fas fa-rotate"></i> <span>Recargar Token</span>
                     </button>
@@ -100,7 +103,7 @@
             <div class="section-title-bar">
                 <div>
                     <h2 class="section-title"><i class="fas fa-calendar-star"></i> Agenda de Partidos de Hoy</h2>
-                    <p class="section-subtitle">Horarios actualizados y señales directas sincronizadas con la agenda oficial</p>
+                    <p class="section-subtitle">En vivo, próximos y finalizados · estado según el horario de inicio</p>
                 </div>
                 <div class="search-filter-box">
                     <div class="input-with-icon">
@@ -153,6 +156,6 @@
     </footer>
 
     <!-- App JavaScript -->
-    <script src="{{ url_for('static', filename='js/app.js', v=2) }}"></script>
+    <script src="{{ url_for('static', filename='js/app.js', v=3) }}"></script>
 </body>
 </html>

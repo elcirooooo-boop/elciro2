@@ -3,9 +3,11 @@ import re
 import json
 import time
 import urllib.request
+import urllib.parse
+import urllib.error
 import ssl
 from threading import Lock
-from flask import Flask, render_template, jsonify, request, Response
+from flask import Flask, render_template, jsonify, request, Response, url_for, stream_with_context
 
 app = Flask(__name__)
 
@@ -18,6 +20,59 @@ HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     'Referer': 'https://tarjetarojatv.mobi/'
 }
+
+# El proxy solo acepta hosts de video conocidos para impedir que se use como
+# proxy abierto contra direcciones arbitrarias.
+STREAM_HOST_SUFFIXES = ('.fubo18.com',)
+STREAM_ROOT_HOSTS = {'fubo18.com'}
+
+
+def is_allowed_stream_url(url):
+    try:
+        parsed = urllib.parse.urlsplit(url)
+        host = (parsed.hostname or '').lower()
+        return (parsed.scheme == 'https' and parsed.port in (None, 443) and
+                (host in STREAM_ROOT_HOSTS or host.endswith(STREAM_HOST_SUFFIXES)))
+    except (TypeError, ValueError):
+        return False
+
+
+class SafeStreamRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        target = urllib.parse.urljoin(req.full_url, newurl)
+        if not is_allowed_stream_url(target):
+            raise urllib.error.HTTPError(target, code, 'Redirect host is not allowed', headers, fp)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def stream_opener():
+    return urllib.request.build_opener(SafeStreamRedirectHandler())
+
+
+def proxy_playlist(content, base_url):
+    """Reescribe sub-playlists y recursos HLS para que pasen por este backend."""
+    text = content.decode('utf-8', errors='replace')
+
+    def proxy_url(url):
+        absolute = urllib.parse.urljoin(base_url, url.strip())
+        if not is_allowed_stream_url(absolute):
+            return url
+        return url_for('stream_proxy', url=absolute)
+
+    rewritten = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            rewritten.append(line)
+        elif stripped.startswith('#'):
+            rewritten.append(re.sub(
+                r'URI="([^"]+)"',
+                lambda match: 'URI="' + proxy_url(match.group(1)) + '"',
+                line
+            ))
+        else:
+            rewritten.append(proxy_url(stripped))
+    return ('\n'.join(rewritten) + ('\n' if text.endswith('\n') else '')).encode('utf-8')
 
 # Cache para almacenar tokens resueltos y evitar saturar los servidores
 CACHE = {
@@ -252,7 +307,7 @@ def resolve_stream():
         return jsonify({
             'success': True,
             'iframe': iframe_url,
-            'm3u8': m3u8_url
+            'm3u8': url_for('stream_proxy', url=m3u8_url)
         })
     else:
         return jsonify({
@@ -260,6 +315,72 @@ def resolve_stream():
             'iframe': iframe_url,
             'error': 'No se pudo extraer el enlace directo m3u8, utilice el modo iframe'
         }), 404
+
+
+@app.route('/api/stream-proxy')
+def stream_proxy():
+    """Sirve manifests y segmentos HLS desde el mismo host de la aplicación."""
+    upstream_url = request.args.get('url', '')
+    if len(upstream_url) > 8192 or not is_allowed_stream_url(upstream_url):
+        return jsonify({'error': 'URL de transmisión no permitida'}), 400
+
+    headers = dict(HEADERS)
+    # Algunos servidores CDN requieren el origen de la página que pidió la señal.
+    headers['Referer'] = request.host_url
+    range_header = request.headers.get('Range')
+    if range_header and re.fullmatch(r'bytes=\d*-\d*', range_header):
+        headers['Range'] = range_header
+
+    upstream_request = urllib.request.Request(upstream_url, headers=headers)
+    try:
+        upstream = stream_opener().open(upstream_request, timeout=20)
+    except urllib.error.HTTPError as exc:
+        exc.close()
+        return jsonify({'error': 'El servidor de video rechazó la solicitud', 'upstream_status': exc.code}), 502
+    except Exception:
+        return jsonify({'error': 'No se pudo conectar con el servidor de video'}), 502
+
+    final_url = upstream.geturl()
+    if not is_allowed_stream_url(final_url):
+        upstream.close()
+        return jsonify({'error': 'Redirección de video no permitida'}), 502
+
+    content_type = upstream.headers.get('Content-Type', 'application/octet-stream')
+    is_playlist = ('.m3u8' in urllib.parse.urlsplit(final_url).path.lower() or
+                   'mpegurl' in content_type.lower())
+    if is_playlist:
+        try:
+            body = upstream.read(2 * 1024 * 1024 + 1)
+        finally:
+            upstream.close()
+        if len(body) > 2 * 1024 * 1024:
+            return jsonify({'error': 'La lista de video excede el tamaño permitido'}), 502
+        response = Response(proxy_playlist(body, final_url), status=200, content_type='application/vnd.apple.mpegurl')
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Access-Control-Allow-Origin'] = '*'
+        return response
+
+    response_headers = {}
+    for name in ('Content-Length', 'Content-Range', 'Accept-Ranges', 'Cache-Control', 'Last-Modified'):
+        value = upstream.headers.get(name)
+        if value:
+            response_headers[name] = value
+
+    @stream_with_context
+    def generate():
+        try:
+            while True:
+                chunk = upstream.read(256 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            upstream.close()
+
+    response = Response(generate(), status=getattr(upstream, 'status', 200), content_type=content_type,
+                        headers=response_headers, direct_passthrough=True)
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    return response
 
 if __name__ == '__main__':
     import sys

@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>El Ciro - Fútbol y Deportes en Vivo</title>
+    <!-- Favicon -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>⚽</text></svg>">
+    
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Cabinet+Grotesk:wght@800;900&display=swap" rel="stylesheet">
+    
+    <!-- Clappr Player & HLS.js -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@clappr/player@latest/dist/clappr.min.js"></script>
+
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- Top Header -->
+    <header class="site-header">
+        <div class="header-container">
+            <div class="logo-area">
+                <div class="logo-icon"><i class="fas fa-futbol"></i></div>
+                <div class="logo-text">
+                    <span class="brand-title">EL CIRO</span>
+                    <span class="brand-sub">Tu centro deportivo en vivo</span>
+                </div>
+            </div>
+
+            <nav class="nav-links">
+                <a href="#player-section" class="nav-item active"><i class="fas fa-play-circle"></i> Transmisión</a>
+                <a href="#agenda-section" class="nav-item"><i class="fas fa-calendar-alt"></i> Agenda de Partidos</a>
+                <a href="#canales-section" class="nav-item"><i class="fas fa-tv"></i> Canales 24/7</a>
+            </nav>
+
+            <div class="header-status">
+                <span class="live-dot"></span>
+                <span class="live-badge">SEÑAL ACTIVA</span>
+                <span id="current-clock" class="clock-display">--:--</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="main-wrapper">
+        <!-- Player Section -->
+        <section id="player-section" class="player-wrapper">
+            <div class="player-header">
+                <div class="current-info">
+                    <span id="player-badge" class="badge red-pulse"><span class="live-dot"></span> EN VIVO</span>
+                    <h2 id="current-stream-title">Selecciona un partido o canal para comenzar</h2>
+                </div>
+
+                <div class="player-actions">
+                    <span class="player-mode-label"><i class="fas fa-bolt"></i> HD Directo</span>
+                    <button id="btn-refresh-stream" class="action-btn" title="Renovar Token y Recargar Señal" onclick="reloadCurrentStream()">
+                        <i class="fas fa-rotate"></i> <span>Recargar Token</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Feed Selector (when event has multiple channels) -->
+            <div id="feed-selector" class="feed-selector hidden">
+                <span class="feed-label"><i class="fas fa-satellite-dish"></i> Opciones de transmisión:</span>
+                <div id="feed-options" class="feed-buttons"></div>
+            </div>
+
+            <!-- Video Display Container -->
+            <div class="video-container" id="video-container">
+                <!-- Direct Player Target -->
+                <div id="direct-player" class="player-element"></div>
+                <!-- Placeholder when nothing is selected -->
+                <div id="player-placeholder" class="player-placeholder">
+                    <div class="placeholder-content">
+                        <div class="placeholder-icon"><i class="fas fa-futbol"></i></div>
+                        <h3>¡Bienvenido a El Ciro!</h3>
+                        <p>Elige un partido de la agenda o un canal de la lista inferior para reproducir la transmisión en vivo.</p>
+                        <button class="primary-btn" onclick="document.getElementById('agenda-section').scrollIntoView({behavior: 'smooth'})">
+                            <i class="fas fa-calendar-day"></i> Ver Agenda de Hoy
+                        </button>
+                    </div>
+                </div>
+                <!-- Loading Overlay -->
+                <div id="player-loader" class="player-loader hidden">
+                    <div class="spinner"></div>
+                    <p id="loader-msg">Extrayendo señal y token HD...</p>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- Agenda Section -->
+        <section id="agenda-section" class="content-section">
+            <div class="section-title-bar">
+                <div>
+                    <h2 class="section-title"><i class="fas fa-calendar-star"></i> Agenda de Partidos de Hoy</h2>
+                    <p class="section-subtitle">Horarios actualizados y señales directas sincronizadas con la agenda oficial</p>
+                </div>
+                <div class="search-filter-box">
+                    <div class="input-with-icon">
+                        <i class="fas fa-search"></i>
+                        <input type="text" id="match-search" placeholder="Buscar partido o equipo..." oninput="filterMatches()">
+                    </div>
+                    <button class="refresh-pill-btn" onclick="fetchAgenda()" title="Actualizar partidos">
+                        <i class="fas fa-sync-alt" id="refresh-icon"></i> Actualizar
+                    </button>
+                </div>
+            </div>
+
+            <!-- Matches List Grid -->
+            <div id="matches-grid" class="matches-grid">
+                <div class="loading-state">
+                    <div class="spinner"></div>
+                    <p>Sincronizando partidos de Tarjeta Roja...</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Canales 24/7 Section -->
+        <section id="canales-section" class="content-section">
+            <div class="section-title-bar">
+                <div>
+                    <h2 class="section-title"><i class="fas fa-tv"></i> Canales Deportivos 24/7</h2>
+                    <p class="section-subtitle">Señales en vivo ininterrumpidas de los principales canales de México y Latinoamérica</p>
+                </div>
+            </div>
+
+            <div id="channels-grid" class="channels-grid">
+                <!-- Se llenará dinámicamente -->
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="site-footer">
+        <div class="footer-container">
+            <div class="footer-brand">
+                <span class="logo-emoji">⚽</span>
+                <h3>EL CIRO</h3>
+                <p>Plataforma independiente de agregación y visualización deportiva en directo.</p>
+            </div>
+            <div class="footer-note">
+                <p>Fuentes extraídas en tiempo real desde <code>tarjetarojatv.mobi</code> y redes CDN asociadas.</p>
+                <p class="copyright">© 2026 El Ciro - Todos los derechos reservados para los amantes del buen fútbol.</p>
+            </div>
+        </div>
+    </footer>
+
+    <!-- App JavaScript -->
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

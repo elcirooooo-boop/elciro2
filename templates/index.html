@@ -12,9 +12,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Cabinet+Grotesk:wght@800;900&display=swap" rel="stylesheet">
     
-    <!-- Clappr Player & HLS.js -->
-    <script src="https://cdn.jsdelivr.net/npm/hls.js@latest"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@clappr/player@latest/dist/clappr.min.js"></script>
+    <!-- HLS.js: reproducción HLS en navegadores con Media Source Extensions -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
 
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -154,6 +153,6 @@
     </footer>
 
     <!-- App JavaScript -->
-    <script src="/static/js/app.js"></script>
+    <script src="{{ url_for('static', filename='js/app.js', v=2) }}"></script>
 </body>
 </html>

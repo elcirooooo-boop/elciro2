@@ -11,7 +11,7 @@ let state = {
     currentFeed: null,
     currentM3u8: null,
     currentIframe: null,
-    clapprPlayer: null,
+    hlsPlayer: null,
     viewerId: null,
     activeMatchId: null,
     viewerCounts: {}
@@ -337,57 +337,46 @@ async function renderDirectHls(iframeUrl, forceRefresh = false) {
     }
 }
 
-// Inicializar reproductor Clappr
+// Reproducir HLS directamente con HLS.js; usar HLS nativo cuando exista.
 function initClapprPlayer(m3u8Url) {
     destroyClappr();
-
-    try {
-        state.clapprPlayer = new Clappr.Player({
-            source: m3u8Url,
-            parentId: "#direct-player",
-            width: "100%",
-            height: "100%",
-            autoPlay: true,
-            mediacontrol: {
-                seekbar: "#00e676",
-                buttons: "#ffffff"
-            },
-            playback: {
-                playInline: true,
-                hlsjsConfig: {
-                    enableWorker: true,
-                    liveSyncDurationCount: 3
-                }
-            }
-        });
-    } catch (e) {
-        console.error("Error al montar Clappr:", e);
-        // Fallback nativo a tag video con HLS.js si Clappr falla
-        mountNativeHls(m3u8Url);
-    }
-}
-
-function mountNativeHls(m3u8Url) {
     elements.directPlayer.innerHTML = `<video id="native-video" controls autoplay playsinline style="width:100%;height:100%;object-fit:contain;background:#000;"></video>`;
     const video = document.getElementById('native-video');
-    
-    if (Hls.isSupported()) {
-        const hls = new Hls();
-        hls.loadSource(m3u8Url);
-        hls.attachMedia(video);
-        hls.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+
+    if (window.Hls && Hls.isSupported()) {
+        state.hlsPlayer = new Hls({
+            enableWorker: true,
+            liveSyncDurationCount: 3
+        });
+        state.hlsPlayer.loadSource(m3u8Url);
+        state.hlsPlayer.attachMedia(video);
+        state.hlsPlayer.on(Hls.Events.MANIFEST_PARSED, () => video.play().catch(() => {}));
+        state.hlsPlayer.on(Hls.Events.ERROR, (_event, data) => {
+            if (!data.fatal) return;
+            console.error('Error fatal de HLS:', data.type, data.details);
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                showStreamError('No se pudo cargar la señal desde el servidor. Pulsa «Recargar Token» para volver a intentarlo.');
+            } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                state.hlsPlayer.recoverMediaError();
+            } else {
+                destroyClappr();
+                showStreamError('No se pudo reproducir esta transmisión. Intenta recargar el token.');
+            }
+        });
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
         video.src = m3u8Url;
         video.play().catch(() => {});
+    } else {
+        showStreamError('Este navegador no ofrece reproducción HLS. Prueba con Chrome, Edge o Safari actualizados.');
     }
 }
 
 function destroyClappr() {
-    if (state.clapprPlayer) {
+    if (state.hlsPlayer) {
         try {
-            state.clapprPlayer.destroy();
+            state.hlsPlayer.destroy();
         } catch (e) {}
-        state.clapprPlayer = null;
+        state.hlsPlayer = null;
     }
     elements.directPlayer.innerHTML = "";
 }

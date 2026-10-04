@@ -176,7 +176,7 @@ function renderMatches(matches) {
         const sourceStatus = String(match.status || match.state || '').toLowerCase();
         const explicitLive = match.is_live === true || /^(live|en vivo|in progress)$/i.test(sourceStatus);
         const explicitlyFinished = /^(finished|final|finalizado|ended|terminado)$/i.test(sourceStatus);
-        const status = explicitLive || (!explicitlyFinished && kickoff && kickoff <= now && now - kickoff < 150 * 60 * 1000)
+        const status = explicitLive || (!explicitlyFinished && kickoff && kickoff <= now)
             ? 'live'
             : (explicitlyFinished || (kickoff && kickoff <= now) ? 'finished' : 'upcoming');
         grouped[status].push({ match, kickoff, status });
